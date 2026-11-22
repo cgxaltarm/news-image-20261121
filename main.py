@@ -1,54 +1,76 @@
 #!/usr/bin/env python3
-"""news-image-20261121 — entry program (Python 3, standard library only).
+"""Publish the pre-rendered front page for news-image-20261121.
 
-Writes the pre-rendered front page (entry.png, 1024x1024, 33 stories
-from Saturday 21 November 2026) to the output directory, after
-checking the file is a real PNG inside the competition limits.
+The competition entry is a single picture: entry.png, a newspaper front
+page for Saturday 21 November 2026 with 33 stories, drawn at build time
+by work/frontpage_21nov.py. This program's only job is to hand that
+picture to the grader: check it really is a PNG inside the size limits,
+then copy it byte for byte into the output folder the grader reads.
 
-The front page itself is drawn at build time by work/frontpage_21nov.py
-(Pillow, flat vector-style drawing, no external images). This program
-uses only the standard library because nothing is installed before it
-runs in the scoring container.
+Standard library only — nothing is installed before this runs in the
+scoring container, so no Pillow here, just raw bytes and shutil.
 """
+
 import os
 import shutil
 import struct
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "entry.png")
-OUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-OUT = os.path.join(OUT_DIR, "entry.png")
+# Where the picture lives, and where the grader expects it.
+BASE = os.path.dirname(os.path.abspath(__file__))
+SOURCE = os.path.join(BASE, "entry.png")
+DEST_FOLDER = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+DEST = os.path.join(DEST_FOLDER, "entry.png")
 
-PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-MAX_BYTES = 1048576
-MAX_SIDE = 1024
+# Competition limits for the picture.
+BYTE_LIMIT = 1024 * 1024
+SIDE_LIMIT = 1024
+
+# First eight bytes of every PNG file.
+SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
-def main():
-    with open(SRC, "rb") as fh:
-        buf = fh.read()
-    if buf[:8] != PNG_MAGIC:
-        raise SystemExit("entry.png is not a PNG file")
-    if buf[12:16] != b"IHDR":
-        raise SystemExit("entry.png has no IHDR chunk")
-    if len(buf) > MAX_BYTES:
-        raise SystemExit(f"entry.png is {len(buf)} bytes, over the 1 MiB limit")
-    # IHDR: width at bytes 16-19, height at 20-23 (big-endian uint32).
-    width, height = struct.unpack(">II", buf[16:24])
-    if width > MAX_SIDE or height > MAX_SIDE:
-        raise SystemExit(f"entry.png is {width}x{height}, over the 1024x1024 limit")
-    print(f"entry.png: {width}x{height}, {len(buf)} bytes")
+def load_picture(path):
+    """Read the picture and confirm it is a PNG within the limits."""
+    with open(path, "rb") as handle:
+        data = handle.read()
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    shutil.copyfile(SRC, OUT)
-    # Determinism: the written file must be byte-identical to the source.
-    with open(OUT, "rb") as fh:
-        written = fh.read()
-    if written != buf:
-        raise SystemExit("output differs from entry.png")
-    print(f"wrote {OUT} ({len(written)} bytes, byte-identical)")
+    if data[:8] != SIGNATURE:
+        raise SystemExit("entry.png does not start with the PNG signature")
+    if data[12:16] != b"IHDR":
+        raise SystemExit("entry.png is missing its IHDR chunk")
+
+    width, height = struct.unpack(">II", data[16:24])
+    if width == 0 or height == 0:
+        raise SystemExit("entry.png has a zero width or height in its IHDR")
+    if width > SIDE_LIMIT or height > SIDE_LIMIT:
+        raise SystemExit(
+            "entry.png is %dx%d, larger than the %dx%d limit"
+            % (width, height, SIDE_LIMIT, SIDE_LIMIT)
+        )
+    if len(data) > BYTE_LIMIT:
+        raise SystemExit(
+            "entry.png is %d bytes, over the 1 MiB limit" % len(data)
+        )
+    return data, width, height
+
+
+def publish(data):
+    """Copy the picture into the output folder, checking it matches."""
+    os.makedirs(DEST_FOLDER, exist_ok=True)
+    shutil.copyfile(SOURCE, DEST)
+    with open(DEST, "rb") as handle:
+        copied = handle.read()
+    if copied != data:
+        raise SystemExit("the copied file differs from entry.png")
+
+
+def run():
+    data, width, height = load_picture(SOURCE)
+    print("entry.png: %dx%d, %d bytes" % (width, height, len(data)))
+    publish(data)
+    print("wrote %s (%d bytes, identical to the source)" % (DEST, len(data)))
 
 
 if __name__ == "__main__":
-    main()
+    run()
